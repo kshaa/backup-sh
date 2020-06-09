@@ -1,0 +1,18 @@
+tasks:
+- name: "backup-list-aaa"
+  description: "List AAA backups at remote"
+  groups: [ "backup", "list" ]
+  task: "echo \"Listing backup:\"\nls"
+
+- name: "backup-create-aaa"
+  description: "Create AAA backup"
+  groups: [ "backup", "create" ]
+  task: "echo \"Creating backup:\"\nls"
+
+- name: "backup-restore-aaa"
+  description: "Restore AAA backup"
+  groups: [ "backup", "restore" ]
+  task: |
+    env
+    echo "Restoring backup:"
+    ls
