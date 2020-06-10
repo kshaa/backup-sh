@@ -126,6 +126,7 @@ RESOURCE_PATH_RAW="$(echo $CONFIG_JSON | jq '.resource_path' -r)"
 RESOURCE_PATH="${RESOURCE_PATH_RAW%/}"
 STORAGE_PATH_RAW="$(echo $CONFIG_JSON | jq '.storage_path' -r)"
 STORAGE_PATH="${STORAGE_PATH_RAW%/}"
+RESOURCE_TYPE="$(echo $CONFIG_JSON | jq '.resource_type' -r)"
 
 # Validation: Backup type is correct
 TYPE_VALID=""
@@ -138,9 +139,40 @@ do
 done
 if [ -z "$TYPE_VALID" ]
 then
-    echo "Error: Unknown backup type '$BACKUP_TYPE'"
-    echo "Run '$SCRIPT help-config' for help"
+    echo "Error: Unknown backup type '$BACKUP_TYPE'" >&2
+    echo "Run '$SCRIPT help-config' for help" >&2
     exit 1
+fi
+
+# Validation: Backup resource type is correct
+TYPE_VALID=""
+for KNOWN_TYPE in "file" "directory"
+do
+    if [ "$RESOURCE_TYPE" == "$KNOWN_TYPE" ]
+    then
+        TYPE_VALID="1"
+    fi
+done
+if [ -z "$TYPE_VALID" ]
+then
+    echo "Error: Unknown backup resource type '$BACKUP_TYPE'" >&2
+    echo "Run '$SCRIPT help-config' for help" >&2
+    exit 1
+fi
+
+# Validation: Backup resource actually matches expected type if it exists
+if ls "$RESOURCE_PATH" 1>/dev/null 2>/dev/null
+then
+    if [ "$RESOURCE_TYPE" == "file" ] && [ ! -f "$RESOURCE_PATH" ]
+    then
+        echo "Error: Backup resource doesn't match type '$RESOURCE_TYPE'" >&2
+        exit 1
+    fi
+    if [ "$RESOURCE_TYPE" == "directory" ] && [ ! -d "$RESOURCE_PATH" ]
+    then
+        echo "Error: Backup resource doesn't match type '$RESOURCE_TYPE'" >&2
+        exit 1
+    fi
 fi
 
 # Backup utility: Fetch backups
@@ -178,6 +210,7 @@ fetch_backup_infos() {
 # only relevant backups based on parameters
 filter_backup_infos() {
     BACKUP_INFOS="${1:-}"
+    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq '[ .[] | select(.groups[]? | contains("'$BACKUP_NAME'")) ]')"
     FILTER="${2:-}"
     if [ "$FILTER" == "name" ]
     then
@@ -214,6 +247,12 @@ filter_backup_infos() {
 # Generates a JSON list of information about
 # backups currently available in storage
 create_backup() {
+    if ! ls "$RESOURCE_PATH" 1>/dev/null 2>/dev/null
+    then
+        echo "Error: Backup resource doesn't exist" >&2
+        exit 1
+    fi
+
     # Backup creation info
     TIMESTAMP="$(date +"%Y-%m-%d-%H-%M-%S")"
     BACKUP_FULL_NAME="$BACKUP_NAME-$TIMESTAMP"
@@ -241,7 +280,14 @@ create_backup() {
     then
         STORAGE_FULL_PATH="$STORAGE_PATH/$BACKUP_FULL_NAME"
         mkdir "$STORAGE_FULL_PATH"
-        rsync "$RESOURCE_PATH" "$STORAGE_FULL_PATH/data"
+        if [ "$RESOURCE_TYPE" == "file" ]
+        then
+            rsync --delete -rvh "$RESOURCE_PATH" "$STORAGE_FULL_PATH/data"
+        elif [ "$RESOURCE_TYPE" == "directory" ]
+        then
+            mkdir "$STORAGE_FULL_PATH/data"
+            rsync --delete -rvh "$RESOURCE_PATH/" "$STORAGE_FULL_PATH/data/"
+        fi
         INFO="$(jq -nr "{ name: \"$BACKUP_FULL_NAME\", description: \"$BACKUP_DESCRIPTION\", created_at: \"$TIMESTAMP\", groups: $BACKUP_GROUPS }")"
         echo "$INFO" | jq '.' -r > $STORAGE_FULL_PATH/info.json
     fi
@@ -271,7 +317,18 @@ restore_backup() {
     then
         BACKUP_PATH="$(echo "$LATEST_BACKUP" | jq '.meta.backup_path' -r)"
         if [ -n "$VERBOSE" ]; then echo "Restoring from: $BACKUP_PATH"; fi
-        rsync "$BACKUP_PATH/data" "$RESOURCE_PATH"
+        
+        if [ "$RESOURCE_TYPE" == "file" ]
+        then
+            rsync --delete -rvh "$BACKUP_PATH/data" "$RESOURCE_PATH"
+        elif [ "$RESOURCE_TYPE" == "directory" ]
+        then
+            if ! ls "$RESOURCE_PATH" 1>/dev/null 2>/dev/null
+            then
+                mkdir "$RESOURCE_PATH"
+            fi
+            rsync --delete -rvh "$BACKUP_PATH/data/" "$RESOURCE_PATH/"
+        fi
     fi
 }
 
