@@ -257,6 +257,24 @@ delete_backup() {
     fi
 }
 
+# Backup utility: Restore backup
+restore_backup() {
+    BACKUP_INFOS="${1:-}"
+    LATEST_BACKUP="$(echo "$BACKUP_INFOS" | jq '.[-1]')"
+    if [ "$LATEST_BACKUP" == "null" ]
+    then
+        echo "Error: No backup to restore from" >&2
+        exit 1
+    fi
+
+    if [ "$BACKUP_TYPE" == "local" ]
+    then
+        BACKUP_PATH="$(echo "$LATEST_BACKUP" | jq '.meta.backup_path' -r)"
+        if [ -n "$VERBOSE" ]; then echo "Restoring from: $BACKUP_PATH"; fi
+        rsync "$BACKUP_PATH/data" "$RESOURCE_PATH"
+    fi
+}
+
 # Run appropriate command based on parameters
 if [ "$ACTION" == "get" ]
 then
@@ -266,6 +284,12 @@ then
 elif [ "$ACTION" == "create" ]
 then
     create_backup "$@"
+elif [ "$ACTION" == "restore" ]
+then
+    BACKUP_INFOS="$(fetch_backup_infos)"
+    BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS" "$FILTER" "$@")"
+
+    restore_backup "$BACKUP_INFOS"
 elif [ "$ACTION" == "delete" ]
 then
     BACKUP_INFOS="$(fetch_backup_infos)"
