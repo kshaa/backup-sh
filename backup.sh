@@ -306,28 +306,22 @@ restore_backup() {
 }
 
 # Run appropriate command based on parameters
+BACKUP_INFOS="$(fetch_backup_infos)"
+BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
 if [ "$ACTION" == "get" ]
 then
-    BACKUP_INFOS="$(fetch_backup_infos)"
-    BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
     echo $BACKUP_INFOS | jq -r '.[] | { name, created_at, groups } ' 
 elif [ "$ACTION" == "describe" ]
 then
-    BACKUP_INFOS="$(fetch_backup_infos)"
-    BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
     echo $BACKUP_INFOS | jq -r
 elif [ "$ACTION" == "create" ]
 then
     create_backup
 elif [ "$ACTION" == "restore" ]
 then
-    BACKUP_INFOS="$(fetch_backup_infos)"
-    BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
     restore_backup "$BACKUP_INFOS"
 elif [ "$ACTION" == "delete" ]
 then
-    BACKUP_INFOS="$(fetch_backup_infos)"
-    BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
     echo "$BACKUP_INFOS" | jq -rc '.[]' | while IFS='' read BACKUP_INFO
     do
         delete_backup "$BACKUP_INFO"
