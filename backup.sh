@@ -220,11 +220,6 @@ filter_backup_infos() {
         for GROUP in "${FILTER_VALUES[@]}"; do
             BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq '[ .[] | select(.groups[]? | contains("'$GROUP'")) ]')"
         done
-    elif [ -n "$FILTER" ]
-    then
-        echo "Error: Unknown filter '$FILTER'" >&2
-        echo "Run '$SCRIPT help' for help" >&2
-        exit 1
     fi
 
     echo "$BACKUP_INFOS" | jq -r '. | sort_by(.created_at)'
