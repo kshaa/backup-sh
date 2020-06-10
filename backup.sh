@@ -196,8 +196,8 @@ fetch_backup_infos() {
                     echo "Invalid archive: $BACKUP_PATH" >&2
                     continue
                 fi
-                INFO_JSON="$(echo $INFO_JSON | jq '. * { meta: { backup_path: "'$BACKUP_PATH'" } }' -r)"
-                BACKUP_INFOS="$(echo $BACKUP_INFOS | jq "[ .[], $INFO_JSON ]" -r)"
+                INFO_JSON="$(echo $INFO_JSON | jq -r --arg backup_path "$BACKUP_PATH" '. * { meta: { backup_path: $backup_path } }')"
+                BACKUP_INFOS="$(echo $BACKUP_INFOS | jq -r --argjson info_json "$INFO_JSON" '[ .[], $info_json ]')"
             fi
         done
 
@@ -210,15 +210,15 @@ fetch_backup_infos() {
 # only relevant backups based on parameters
 filter_backup_infos() {
     BACKUP_INFOS="${1:-}"
-    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq '[ .[] | select(.groups[]? | contains("'$BACKUP_NAME'")) ]')"
+    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | contains($backup_name)) ]')"
     if [ "$FILTER" == "name" ]
     then
         NAME="${FILTER_VALUES[0]:-}"
-        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq '[ .[] | select(.name == "'$NAME'") ]')"
+        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg name "$NAME" '[ .[] | select(.name == $name) ]')"
     elif [ "$FILTER" == "groups" ]
     then
         for GROUP in "${FILTER_VALUES[@]}"; do
-            BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq '[ .[] | select(.groups[]? | contains("'$GROUP'")) ]')"
+            BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$GROUP" '[ .[] | select(.groups[]? | contains($group)) ]')"
         done
     fi
 
@@ -243,7 +243,7 @@ create_backup() {
     then
         for GROUP in "${FILTER_VALUES[@]}"
         do
-            BACKUP_GROUPS="$(echo "$BACKUP_GROUPS" | jq '[ .[], "'"$GROUP"'" ]')"
+            BACKUP_GROUPS="$(echo "$BACKUP_GROUPS" | jq --arg group "$GROUP" '[ .[], $group ]')"
         done
     fi
 
@@ -261,7 +261,21 @@ create_backup() {
             mkdir "$STORAGE_FULL_PATH/data"
             rsync --delete -rvh "$RESOURCE_PATH/" "$STORAGE_FULL_PATH/data/"
         fi
-        INFO="$(jq -nr "{ name: \"$BACKUP_FULL_NAME\", description: \"$BACKUP_DESCRIPTION\", created_at: \"$TIMESTAMP\", groups: $BACKUP_GROUPS }")"
+
+        INFO_STRUCTURE=''
+        INFO_STRUCTURE+='{'
+        INFO_STRUCTURE+='name: $name,'
+        INFO_STRUCTURE+='description: $description,'
+        INFO_STRUCTURE+='created_at: $created_at,'
+        INFO_STRUCTURE+='groups: $groups'
+        INFO_STRUCTURE+='}'
+
+        INFO="$(jq -nr "$INFO_STRUCTURE" \
+            --arg name "$BACKUP_FULL_NAME" \
+            --arg description "$BACKUP_DESCRIPTION" \
+            --arg created_at "$TIMESTAMP" \
+            --argjson groups "$BACKUP_GROUPS")"
+
         echo "$INFO" | jq '.' -r > $STORAGE_FULL_PATH/info.json
     fi
 }
@@ -322,10 +336,10 @@ then
     restore_backup "$BACKUP_INFOS"
 elif [ "$ACTION" == "delete" ]
 then
-    LENGTH="$(echo "$BACKUP_INFOS" | jq length)" && START=0 && END="$(($LENGTH - 1))"
+    LENGTH="$(echo "$BACKUP_INFOS" | jq -r length)" && START=0 && END="$(($LENGTH - 1))"
     for (( INDEX = $START; INDEX <= $END; INDEX++ ))
     do
-        BACKUP_INFO="$(echo "$BACKUP_INFOS" | jq .[$INDEX])"
+        BACKUP_INFO="$(echo "$BACKUP_INFOS" | jq -r --argjson index "$INDEX" '.[$index]')"
         delete_backup "$BACKUP_INFO"
     done
 fi
