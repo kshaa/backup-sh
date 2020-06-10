@@ -322,8 +322,10 @@ then
     restore_backup "$BACKUP_INFOS"
 elif [ "$ACTION" == "delete" ]
 then
-    echo "$BACKUP_INFOS" | jq -rc '.[]' | while IFS='' read BACKUP_INFO
+    LENGTH="$(echo "$BACKUP_INFOS" | jq length)" && START=0 && END="$(($LENGTH - 1))"
+    for (( INDEX = $START; INDEX <= $END; INDEX++ ))
     do
+        BACKUP_INFO="$(echo "$BACKUP_INFOS" | jq .[$INDEX])"
         delete_backup "$BACKUP_INFO"
     done
 fi
