@@ -69,6 +69,7 @@ help_config() {
     echo ".                         <object>    Backup configuration"
     echo ".type                     <string>    Backup storage type (local or ssh)"
     echo ".name                     <string>    Backup name, purely informative"
+    echo ".acl                      <bool>      Whether access control list i.e. permissions should be backed up"
     echo ".description              <string>    Backup description, purely informative"
     echo ".resource_type            <string>    Backup resource type (file or directory)"
     echo ".resource_path            <string>    Path to backup resource"
@@ -149,6 +150,7 @@ json_nullable() {
 # Extracted backup configurations
 BACKUP_TYPE="$(echo $CONFIG_JSON | jq -r .type)"
 BACKUP_NAME="$(echo $CONFIG_JSON | jq -r .name)"
+BACKUP_ACL="$(echo $CONFIG_JSON | jq -r .acl)"
 BACKUP_DESCRIPTION="$(echo $CONFIG_JSON | jq -r .description | json_nullable)"
 RESOURCE_PATH_RAW="$(echo $CONFIG_JSON | jq -r .resource_path)"
 RESOURCE_PATH="${RESOURCE_PATH_RAW%/}"
@@ -213,7 +215,7 @@ then
     OPTIONAL_SSH_USER_HOST="$OPTIONAL_SSH_USER_COMPONENT$OPTIONAL_SSH_HOST_COMPONENT"
     OPTIONAL_STORAGE_SSH_CONTEXT="$OPTIONAL_SSH_PASS ssh -q $OPTIONAL_SSH_KEY_FLAG $OPTIONAL_SSH_PORT_FLAG $OPTIONAL_SSH_USER_HOST"
     OPTIONAL_SSH="$OPTIONAL_STORAGE_SSH_CONTEXT -- "
-    OPTIONAL_SSH_RSYNC_FLAG="-e ssh $OPTIONAL_SSH_PORT_FLAG $OPTIONAL_SSH_KEY_FLAG"
+    OPTIONAL_SSH_RSYNC_FLAG='-e "ssh '$OPTIONAL_SSH_PORT_FLAG' '$OPTIONAL_SSH_KEY_FLAG'"'
     OPTIONAL_SSH_HOST_SEPERATOR=":"
 else
     OPTIONAL_SSH_USER_HOST=""
@@ -358,7 +360,10 @@ create_backup() {
     STORAGE_FULL_PATH="$($OPTIONAL_SSH realpath $STORAGE_PATH)/$BACKUP_FULL_NAME"
     if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
+        # Create directory for backup in storage
         $OPTIONAL_SSH mkdir "$STORAGE_FULL_PATH"
+
+        # Copy backup resource to storage
         if [ "$RESOURCE_TYPE" == "file" ]; then
             OPTIONAL_DIRECTORY_SUFFIX=""
         elif [ "$RESOURCE_TYPE" == "directory" ]; then
@@ -366,14 +371,30 @@ create_backup() {
             OPTIONAL_DIRECTORY_SUFFIX="/"
         fi
 
-        $OPTIONAL_SSH_PASS rsync "$OPTIONAL_SSH_RSYNC_FLAG" \
-            --progress --delete -rvh \
-            "$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX" \
-            "$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$STORAGE_FULL_PATH/data$OPTIONAL_DIRECTORY_SUFFIX"
+        SYNC=""
+        SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
+        SYNC+="--progress --delete -rvh "
+        SYNC+="\"$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX\" "
+        SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$STORAGE_FULL_PATH/data$OPTIONAL_DIRECTORY_SUFFIX\""
+        eval "$SYNC"
 
+        # Copy backup ACL to storage if required
+        if [ "$BACKUP_ACL" == "true" ]
+        then
+            ACL="$(cd "$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX" && getfacl -R . | base64 -w0)"
+            $OPTIONAL_SSH eval "echo \"$ACL\" | base64 -d > $STORAGE_FULL_PATH/acl.txt"
+        fi
+
+        # Copy backup meta info to storage
         INFO_STRUCTURE=''
         INFO_STRUCTURE+='{'
         INFO_STRUCTURE+='name: $name,'
+        if [ "$BACKUP_ACL" == "true" ]
+        then
+            INFO_STRUCTURE+='acl: true,'
+        else
+            INFO_STRUCTURE+='acl: false,'
+        fi
         INFO_STRUCTURE+='description: $description,'
         INFO_STRUCTURE+='created_at: $created_at,'
         INFO_STRUCTURE+='groups: $groups'
@@ -382,9 +403,9 @@ create_backup() {
             --arg name "$BACKUP_FULL_NAME" \
             --arg description "$BACKUP_DESCRIPTION" \
             --arg created_at "$TIMESTAMP" \
-            --argjson groups "$BACKUP_GROUPS" | base64)"
+            --argjson groups "$BACKUP_GROUPS" | base64 -w0)"
 
-        $OPTIONAL_SSH "echo \"$INFO\" | base64 -d > $STORAGE_FULL_PATH/info.json"
+        $OPTIONAL_SSH eval "echo \"$INFO\" | base64 -d > $STORAGE_FULL_PATH/info.json"
     fi
 }
 
@@ -410,9 +431,11 @@ restore_backup() {
 
     if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
+        # Get backup path in storage
         BACKUP_PATH="$(echo "$LATEST_BACKUP" | jq '.meta.backup_path' -r)"
         if [ -n "$VERBOSE" ]; then echo "Restoring from: $BACKUP_PATH"; fi
 
+        # Create resource directory if needed
         if [ "$RESOURCE_TYPE" == "file" ]; then
             OPTIONAL_DIRECTORY_SUFFIX=""
         elif [ "$RESOURCE_TYPE" == "directory" ]; then
@@ -422,34 +445,50 @@ restore_backup() {
             OPTIONAL_DIRECTORY_SUFFIX="/"
         fi
 
-        $OPTIONAL_SSH_PASS rsync "$OPTIONAL_SSH_RSYNC_FLAG" \
-            --progress --delete -rvh \
-            "$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$BACKUP_PATH/data$OPTIONAL_DIRECTORY_SUFFIX" \
-            "$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX"
+        # Restore backup from storage
+        SYNC=""
+        SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
+        SYNC+="--progress --delete -rvh "
+        SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$BACKUP_PATH/data$OPTIONAL_DIRECTORY_SUFFIX\" "
+        SYNC+="\"$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX\""
+        eval "$SYNC"
+
+        # Restore ACL if required
+        if [ "$BACKUP_ACL" == "true" ]
+        then
+            ACL="$($OPTIONAL_SSH cat "$BACKUP_PATH/acl.txt")"
+            TMPACL="$(mktemp)"
+            echo "$ACL" > $TMPACL
+            cd $RESOURCE_PATH
+            setfacl --restore=$TMPACL
+            rm $TMPACL
+        fi
     fi
 }
 
 # Run appropriate command based on parameters
-BACKUP_INFOS="$(fetch_backup_infos)"
-BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
-if [ "$ACTION" == "get" ]
-then
-    echo $BACKUP_INFOS | jq -r '.[] | { name, created_at, groups } ' 
-elif [ "$ACTION" == "describe" ]
-then
-    echo $BACKUP_INFOS | jq -r
-elif [ "$ACTION" == "create" ]
+if [ "$ACTION" == "create" ]
 then
     create_backup
-elif [ "$ACTION" == "restore" ]
-then
-    restore_backup "$BACKUP_INFOS"
-elif [ "$ACTION" == "delete" ]
-then
-    LENGTH="$(echo "$BACKUP_INFOS" | jq -r length)" && START=0 && END="$(($LENGTH - 1))"
-    for (( INDEX = $START; INDEX <= $END; INDEX++ ))
-    do
-        BACKUP_INFO="$(echo "$BACKUP_INFOS" | jq -r --argjson index "$INDEX" '.[$index]')"
-        delete_backup "$BACKUP_INFO"
-    done
+else
+    BACKUP_INFOS="$(fetch_backup_infos)"
+    BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
+    if [ "$ACTION" == "get" ]
+    then
+        echo $BACKUP_INFOS | jq -r '.[] | { name, created_at, groups } ' 
+    elif [ "$ACTION" == "describe" ]
+    then
+        echo $BACKUP_INFOS | jq -r
+    elif [ "$ACTION" == "restore" ]
+    then
+        restore_backup "$BACKUP_INFOS"
+    elif [ "$ACTION" == "delete" ]
+    then
+        LENGTH="$(echo "$BACKUP_INFOS" | jq -r length)" && START=0 && END="$(($LENGTH - 1))"
+        for (( INDEX = $START; INDEX <= $END; INDEX++ ))
+        do
+            BACKUP_INFO="$(echo "$BACKUP_INFOS" | jq -r --argjson index "$INDEX" '.[$index]')"
+            delete_backup "$BACKUP_INFO"
+        done
+    fi
 fi
