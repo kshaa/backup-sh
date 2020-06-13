@@ -70,6 +70,7 @@ help_config() {
     echo ".type                     <string>    Backup storage type (local or ssh)"
     echo ".name                     <string>    Backup name, purely informative"
     echo ".acl                      <bool>      Whether access control list i.e. permissions should be backed up"
+    echo ".max_count                <int>       Maximum amount of backups to be kept in storage (default: infinite)"
     echo ".description              <string>    Backup description, purely informative"
     echo ".resource_type            <string>    Backup resource type (file or directory)"
     echo ".resource_path            <string>    Path to backup resource"
@@ -159,6 +160,7 @@ json_nullable() {
 BACKUP_TYPE="$(echo $CONFIG_JSON | jq -r .type)"
 BACKUP_NAME="$(echo $CONFIG_JSON | jq -r .name)"
 BACKUP_ACL="$(echo $CONFIG_JSON | jq -r .acl)"
+BACKUP_MAX_COUNT="$(echo $CONFIG_JSON | jq -r .max_count | json_nullable)"
 BACKUP_DESCRIPTION="$(echo $CONFIG_JSON | jq -r .description | json_nullable)"
 RESOURCE_PATH_RAW="$(echo $CONFIG_JSON | jq -r .resource_path)"
 RESOURCE_PATH="${RESOURCE_PATH_RAW%/}"
@@ -228,7 +230,7 @@ then
 else
     OPTIONAL_SSH_USER_HOST=""
     OPTIONAL_STORAGE_SSH_CONTEXT=""
-    OPTIONAL_SSH=""
+    OPTIONAL_SSH="eval -- "
     OPTIONAL_SSH_RSYNC_FLAG=""
     OPTIONAL_SSH_HOST_SEPERATOR=""
 fi
@@ -300,10 +302,27 @@ fetch_backup_infos() {
     BACKUP_INFOS="[]"
     if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
-        for INFO_PATH in $($OPTIONAL_SSH find $STORAGE_PATH -name info.json -type f 2>/dev/null)
+        INFO_SEARCH=''
+        INFO_SEARCH+='find '$STORAGE_PATH' -name info.json '
+        INFO_SEARCH+='-type f -exec sh -c '
+        INFO_SEARCH+=\'
+        INFO_SEARCH+='echo "$(echo "$1" | base64 -w0):$(cat "$1" | base64 -w0)"'
+        INFO_SEARCH+=\'
+        INFO_SEARCH+=' - {} \;'
+        for INFO in $($OPTIONAL_SSH $INFO_SEARCH)
         do
-            INFO_JSON="$($OPTIONAL_SSH cat $INFO_PATH)"
-            INFO_JSON="$(echo "$INFO_JSON" | jq -r . 2>/dev/null)"
+            # Parse <Base64:Base64> from SSH stdout i.e. from INFO_SEARCH
+            ORIGINAL_IFS="$IFS"
+            IFS=":"
+            declare -a INFO_FIELDS=($INFO)
+            IFS="$ORIGINAL_IFS"
+            unset ORIGINAL_IFS
+
+            # Parse path & json content
+            INFO_PATH="$(echo ${INFO_FIELDS[0]} | base64 -d)"
+            INFO_JSON="$(echo ${INFO_FIELDS[1]} | base64 -d)"
+
+            # Validate for correctness
             if  [ "$?" != "0" ] || \
                 [ -z "$(echo $INFO_JSON | jq '.name' -r | json_nullable)" ]
             then
@@ -313,6 +332,8 @@ fetch_backup_infos() {
                 fi
                 continue
             fi
+            
+            # Attach metadata and add to valid infos
             INFO_JSON="$(echo $INFO_JSON | jq -r --arg backup_path "$(dirname $INFO_PATH)" '. * { meta: { backup_path: $backup_path } }')"
             BACKUP_INFOS="$(echo $BACKUP_INFOS | jq -r --argjson info_json "$INFO_JSON" '[ .[], $info_json ]')"
         done
@@ -425,7 +446,7 @@ create_backup() {
 delete_backup() {
     BACKUP_INFO="${1:-}"
     BACKUP_PATH="$(echo "$BACKUP_INFO" | jq '.meta.backup_path' -r)"
-    if [ "$BACKUP_TYPE" == "local" ]
+    if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
         $OPTIONAL_SSH rm -r $BACKUP_PATH
     fi
@@ -486,6 +507,19 @@ restore_backup() {
 if [ "$ACTION" == "create" ]
 then
     create_backup
+
+    if [ -n "$BACKUP_MAX_COUNT" ]
+    then
+        BACKUP_INFOS="$(fetch_backup_infos)"
+        BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
+        OLD_BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r '.[:-'$BACKUP_MAX_COUNT']')"
+        LENGTH="$(echo "$OLD_BACKUP_INFOS" | jq -r length)" && START=0 && END="$(($LENGTH - 1))"
+        for (( INDEX = $START; INDEX <= $END; INDEX++ ))
+        do
+            BACKUP_INFO="$(echo "$OLD_BACKUP_INFOS" | jq -r --argjson index "$INDEX" '.[$index]')"
+            delete_backup "$BACKUP_INFO"
+        done
+    fi
 else
     BACKUP_INFOS="$(fetch_backup_infos)"
     BACKUP_INFOS="$(filter_backup_infos "$BACKUP_INFOS")"
