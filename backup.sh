@@ -9,6 +9,11 @@ set -eu
 DEBUG="${DEBUG:-}"
 VERBOSE="${VERBOSE:-}"
 CONFIG="${BACKUP_CONFIG:-backup.json}"
+if [ -n "$DEBUG" ]
+then
+    # In debug mode, just print as much as possible
+    set -x
+fi
 
 # Named parameters
 SCRIPT="${0:-}"
@@ -61,7 +66,18 @@ help_config() {
     echo "$SCRIPT configuration file documentation"
     echo "Configuration parameters described in JSON path format"
     echo
-    echo ".                     <object>    Backup configuration"
+    echo ".                         <object>    Backup configuration"
+    echo ".type                     <string>    Backup storage type (local or ssh)"
+    echo ".name                     <string>    Backup name, purely informative"
+    echo ".description              <string>    Backup description, purely informative"
+    echo ".resource_type            <string>    Backup resource type (file or directory)"
+    echo ".resource_path            <string>    Path to backup resource"
+    echo ".storage_path             <string>    Filesystem path to directory where backups can be stored"
+    echo ".storage_host             <string>    [For SSH] Storage server hostname"
+    echo ".storage_port             <string>    [For SSH] Storage server por"
+    echo ".storage_username         <string>    [For SSH] Storage server username"
+    echo ".storage_private_key_path <string>    [For SSH] Filesystem path to storage server private key"
+    echo ".storage_password_path    <string>    [For SSH] Filesystem path to storage server password"
 }
 
 # Validation: Check if jq exists
