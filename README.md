@@ -45,6 +45,7 @@ Configuration parameters described in JSON path format
 .                         <object>    Backup configuration
 .type                     <string>    Backup storage type (local or ssh)
 .name                     <string>    Backup name, purely informative
+.acl                      <bool>      Whether access control list i.e. permissions should be backed up
 .description              <string>    Backup description, purely informative
 .resource_type            <string>    Backup resource type (file or directory)
 .resource_path            <string>    Path to backup resource
