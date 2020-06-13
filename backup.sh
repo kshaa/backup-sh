@@ -102,6 +102,14 @@ then
     exit 1
 fi
 
+# Validation: Action is correct
+if [ "$(echo '[ "get", "describe", "create", "restore", "delete", "dump", "help", "help-config" ]' | jq '.[] | select(contains("'$ACTION'"))')" == "" ]
+then
+    echo "Error: Unknown action '$ACTION'" >&2
+    echo "Run '$SCRIPT help' for help" >&2
+    exit 1
+fi
+
 # Print help if needed
 if [ "$ACTION" == "help" ]
 then
