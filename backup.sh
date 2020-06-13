@@ -381,7 +381,11 @@ create_backup() {
         # Copy backup ACL to storage if required
         if [ "$BACKUP_ACL" == "true" ]
         then
-            ACL="$(cd "$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX" && getfacl -R . | base64 -w0)"
+            if [ "$RESOURCE_TYPE" == "file" ]; then
+                ACL="$(cd "$(dirname $RESOURCE_PATH)" && getfacl -R $(basename $RESOURCE_PATH) | base64 -w0)"
+            elif [ "$RESOURCE_TYPE" == "directory" ]; then
+                ACL="$(cd "$RESOURCE_PATH" && getfacl -R . | base64 -w0)"
+            fi
             $OPTIONAL_SSH eval "echo \"$ACL\" | base64 -d > $STORAGE_FULL_PATH/acl.txt"
         fi
 
@@ -459,7 +463,11 @@ restore_backup() {
             ACL="$($OPTIONAL_SSH cat "$BACKUP_PATH/acl.txt")"
             TMPACL="$(mktemp)"
             echo "$ACL" > $TMPACL
-            cd $RESOURCE_PATH
+            if [ "$RESOURCE_TYPE" == "file" ]; then
+                cd "$(dirname $RESOURCE_PATH)"
+            elif [ "$RESOURCE_TYPE" == "directory" ]; then
+                cd $RESOURCE_PATH
+            fi
             setfacl --restore=$TMPACL
             rm $TMPACL
         fi
