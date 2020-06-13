@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 
-# Fail hard
+# If any statement in this script fails
+# Then the whole script should fail
+# TL;DR Fail hard! Strict mode!
 set -eu
 
 # Environment variables
@@ -63,7 +65,6 @@ help_config() {
 }
 
 # Validation: Check if jq exists
-# Source: https://stackoverflow.com/a/26759734
 if ! [ -x "$(command -v jq)" ]
 then
   echo 'Error: jq is not installed.' >&2
@@ -71,10 +72,9 @@ then
 fi
 
 # Validation: Check if yq exists
-# Source: https://stackoverflow.com/a/26759734
 if ! [ -x "$(command -v yq)" ] && [ -n "$VERBOSE" ]
 then
-  echo 'Warn: yq is not installed.' >&2
+  echo 'Warn: yq is not installed, therefore YAML is not supported' >&2
 fi
 
 # Validation: Action is required
@@ -119,18 +119,108 @@ then
     exit 0
 fi
 
-# Backup common configurations
+# Utility: Make null keyword actually an empty string
+json_nullable() {
+    read VALUE
+    if [ "$VALUE" == "null" ]
+    then
+        echo ""
+    else
+        echo "$VALUE"
+    fi
+}
+
+# Extracted backup configurations
 BACKUP_TYPE="$(echo $CONFIG_JSON | jq -r .type)"
 BACKUP_NAME="$(echo $CONFIG_JSON | jq -r .name)"
-BACKUP_DESCRIPTION="$(echo $CONFIG_JSON | jq -r .description)"
+BACKUP_DESCRIPTION="$(echo $CONFIG_JSON | jq -r .description | json_nullable)"
 RESOURCE_PATH_RAW="$(echo $CONFIG_JSON | jq -r .resource_path)"
 RESOURCE_PATH="${RESOURCE_PATH_RAW%/}"
+RESOURCE_TYPE="$(echo $CONFIG_JSON | jq -r .resource_type)"
 STORAGE_PATH_RAW="$(echo $CONFIG_JSON | jq -r .storage_path)"
 STORAGE_PATH="${STORAGE_PATH_RAW%/}"
-RESOURCE_TYPE="$(echo $CONFIG_JSON | jq -r .resource_type)"
+STORAGE_PASSWORD_PATH="$(echo $CONFIG_JSON | jq -r .storage_password_path | json_nullable)"
+STORAGE_PRIVATE_KEY_PATH="$(echo $CONFIG_JSON | jq -r .storage_private_key_path | json_nullable)"
+STORAGE_HOST="$(echo $CONFIG_JSON | jq -r .storage_host)"
+STORAGE_PORT="$(echo $CONFIG_JSON | jq -r .storage_port | json_nullable)"
+STORAGE_USERNAME="$(echo $CONFIG_JSON | jq -r .storage_username | json_nullable)"
+
+# SSH type configuration: Password
+if [ -z "$STORAGE_PASSWORD_PATH" ]
+then
+    OPTIONAL_SSH_PASS=""
+else
+    OPTIONAL_SSH_PASS="sshpass -f $(realpath $STORAGE_PASSWORD_PATH)"
+fi
+
+# SSH type configuration: Private key
+if [ -z "$STORAGE_PRIVATE_KEY_PATH" ]
+then
+    OPTIONAL_SSH_KEY_FLAG=""
+else
+    OPTIONAL_SSH_KEY_FLAG="-i $(realpath $STORAGE_PRIVATE_KEY_PATH)"
+fi
+
+# SSH type configuration: Port
+if [ -z "$STORAGE_PORT" ]
+then
+    OPTIONAL_SSH_PORT_FLAG=""
+else
+    OPTIONAL_SSH_PORT_FLAG="-p $STORAGE_PORT"
+fi
+
+# SSH type configuration: Username component
+if [ -z "$STORAGE_USERNAME" ]
+then
+    OPTIONAL_SSH_USER_COMPONENT=""
+else
+    OPTIONAL_SSH_USER_COMPONENT="$STORAGE_USERNAME@"
+fi
+
+# Validation: Hostname is required for SSH
+if [ "$BACKUP_TYPE" == "ssh" ] && [ -z "$STORAGE_HOST" ]
+then
+    echo "Error: Hostname is required for an SSH connection" >&2
+    exit 1
+fi
+
+# SSH type configuration: Host component
+if [ -z "$STORAGE_HOST" ]
+then
+    OPTIONAL_SSH_HOST_COMPONENT=""
+else
+    OPTIONAL_SSH_HOST_COMPONENT="$STORAGE_HOST"
+fi
+# SSH type configuration: Context
+if [ "$BACKUP_TYPE" == "ssh" ]
+then
+    OPTIONAL_SSH_USER_HOST="$OPTIONAL_SSH_USER_COMPONENT$OPTIONAL_SSH_HOST_COMPONENT"
+    OPTIONAL_STORAGE_SSH_CONTEXT="$OPTIONAL_SSH_PASS ssh -q $OPTIONAL_SSH_KEY_FLAG $OPTIONAL_SSH_PORT_FLAG $OPTIONAL_SSH_USER_HOST"
+    OPTIONAL_SSH="$OPTIONAL_STORAGE_SSH_CONTEXT -- "
+    OPTIONAL_SSH_RSYNC_FLAG="-e ssh $OPTIONAL_SSH_PORT_FLAG $OPTIONAL_SSH_KEY_FLAG"
+    OPTIONAL_SSH_HOST_SEPERATOR=":"
+else
+    OPTIONAL_SSH_USER_HOST=""
+    OPTIONAL_STORAGE_SSH_CONTEXT=""
+    OPTIONAL_SSH=""
+    OPTIONAL_SSH_RSYNC_FLAG=""
+    OPTIONAL_SSH_HOST_SEPERATOR=""
+fi
+
+if [ -n "$DEBUG" ]
+then
+    echo "Debug: SSH execution statement: $OPTIONAL_STORAGE_SSH_CONTEXT" >&2
+fi
+
+# Validation: SSH password requires `sshpass`
+if ! [ -x "$(command -v sshpass)" ] && [ "$BACKUP_TYPE" == "ssh" ] && [ -n "$STORAGE_PRIVATE_KEY_PATH" ]
+then
+  echo 'Error: sshpass is not installed, but is required for SSH auth w/ password.' >&2
+  exit 1
+fi
 
 # Validation: Backup type is correct
-if [ "$(echo '[ "local", "remote" ]' | jq '.[] | select(contains("'$BACKUP_TYPE'"))')" == "" ]
+if [ "$(echo '[ "local", "ssh" ]' | jq '.[] | select(contains("'$BACKUP_TYPE'"))')" == "" ]
 then
     echo "Error: Unknown backup type '$BACKUP_TYPE'" >&2
     echo "Run '$SCRIPT help-config' for help" >&2
@@ -182,27 +272,27 @@ fi
 # backups currently available in storage
 fetch_backup_infos() {
     BACKUP_INFOS="[]"
-    if [ "$BACKUP_TYPE" == "local" ]
+    if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
-        for BACKUP_PATH in $(find $STORAGE_PATH)
+        for INFO_PATH in $($OPTIONAL_SSH find $STORAGE_PATH -name info.json -type f 2>/dev/null)
         do
-            INFO_PATH="$BACKUP_PATH/info.json"
-            if [ -f "$INFO_PATH" ]
+            INFO_JSON="$($OPTIONAL_SSH cat $INFO_PATH)"
+            INFO_JSON="$(echo "$INFO_JSON" | jq -r . 2>/dev/null)"
+            if  [ "$?" != "0" ] || \
+                [ -z "$(echo $INFO_JSON | jq '.name' -r | json_nullable)" ]
             then
-                INFO_JSON="$(cat $INFO_PATH)"
-                if  [ -z "$(echo $INFO_JSON | jq '.name' -r)" ] && \
-                    [ -n "$VERBOSE" ]
+                if [ -n "$VERBOSE" ]
                 then
-                    echo "Invalid archive: $BACKUP_PATH" >&2
-                    continue
+                    echo "Invalid archive: $INFO_PATH" >&2
                 fi
-                INFO_JSON="$(echo $INFO_JSON | jq -r --arg backup_path "$BACKUP_PATH" '. * { meta: { backup_path: $backup_path } }')"
-                BACKUP_INFOS="$(echo $BACKUP_INFOS | jq -r --argjson info_json "$INFO_JSON" '[ .[], $info_json ]')"
+                continue
             fi
+            INFO_JSON="$(echo $INFO_JSON | jq -r --arg backup_path "$(dirname $INFO_PATH)" '. * { meta: { backup_path: $backup_path } }')"
+            BACKUP_INFOS="$(echo $BACKUP_INFOS | jq -r --argjson info_json "$INFO_JSON" '[ .[], $info_json ]')"
         done
-
-        echo "$BACKUP_INFOS" | jq '.' -r
     fi
+
+    echo "$BACKUP_INFOS" | jq '.' -r
 }
 
 # Backup utility: Filter backups
@@ -249,18 +339,21 @@ create_backup() {
 
     # Backup creation
     BACKUP_FULL_NAME="$BACKUP_NAME-$TIMESTAMP"
-    STORAGE_FULL_PATH="$STORAGE_PATH/$BACKUP_FULL_NAME"
-    if [ "$BACKUP_TYPE" == "local" ]
+    STORAGE_FULL_PATH="$($OPTIONAL_SSH realpath $STORAGE_PATH)/$BACKUP_FULL_NAME"
+    if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
-        mkdir "$STORAGE_FULL_PATH"
-        if [ "$RESOURCE_TYPE" == "file" ]
-        then
-            rsync --delete -rvh "$RESOURCE_PATH" "$STORAGE_FULL_PATH/data"
-        elif [ "$RESOURCE_TYPE" == "directory" ]
-        then
-            mkdir "$STORAGE_FULL_PATH/data"
-            rsync --delete -rvh "$RESOURCE_PATH/" "$STORAGE_FULL_PATH/data/"
+        $OPTIONAL_SSH mkdir "$STORAGE_FULL_PATH"
+        if [ "$RESOURCE_TYPE" == "file" ]; then
+            OPTIONAL_DIRECTORY_SUFFIX=""
+        elif [ "$RESOURCE_TYPE" == "directory" ]; then
+            $OPTIONAL_SSH mkdir "$STORAGE_FULL_PATH/data"
+            OPTIONAL_DIRECTORY_SUFFIX="/"
         fi
+
+        $OPTIONAL_SSH_PASS rsync "$OPTIONAL_SSH_RSYNC_FLAG" \
+            --progress --delete -rvh \
+            "$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX" \
+            "$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$STORAGE_FULL_PATH/data$OPTIONAL_DIRECTORY_SUFFIX"
 
         INFO_STRUCTURE=''
         INFO_STRUCTURE+='{'
@@ -269,14 +362,13 @@ create_backup() {
         INFO_STRUCTURE+='created_at: $created_at,'
         INFO_STRUCTURE+='groups: $groups'
         INFO_STRUCTURE+='}'
-
         INFO="$(jq -nr "$INFO_STRUCTURE" \
             --arg name "$BACKUP_FULL_NAME" \
             --arg description "$BACKUP_DESCRIPTION" \
             --arg created_at "$TIMESTAMP" \
-            --argjson groups "$BACKUP_GROUPS")"
+            --argjson groups "$BACKUP_GROUPS" | base64)"
 
-        echo "$INFO" | jq '.' -r > $STORAGE_FULL_PATH/info.json
+        $OPTIONAL_SSH "echo \"$INFO\" | base64 -d > $STORAGE_FULL_PATH/info.json"
     fi
 }
 
@@ -286,7 +378,7 @@ delete_backup() {
     BACKUP_PATH="$(echo "$BACKUP_INFO" | jq '.meta.backup_path' -r)"
     if [ "$BACKUP_TYPE" == "local" ]
     then
-        rm -r $BACKUP_PATH
+        $OPTIONAL_SSH rm -r $BACKUP_PATH
     fi
 }
 
@@ -300,22 +392,24 @@ restore_backup() {
         exit 1
     fi
 
-    if [ "$BACKUP_TYPE" == "local" ]
+    if [ "$BACKUP_TYPE" == "local" ] || [ "$BACKUP_TYPE" == "ssh" ]
     then
         BACKUP_PATH="$(echo "$LATEST_BACKUP" | jq '.meta.backup_path' -r)"
         if [ -n "$VERBOSE" ]; then echo "Restoring from: $BACKUP_PATH"; fi
-        
-        if [ "$RESOURCE_TYPE" == "file" ]
-        then
-            rsync --delete -rvh "$BACKUP_PATH/data" "$RESOURCE_PATH"
-        elif [ "$RESOURCE_TYPE" == "directory" ]
-        then
-            if ! ls "$RESOURCE_PATH" 1>/dev/null 2>/dev/null
-            then
+
+        if [ "$RESOURCE_TYPE" == "file" ]; then
+            OPTIONAL_DIRECTORY_SUFFIX=""
+        elif [ "$RESOURCE_TYPE" == "directory" ]; then
+            if ! ls "$RESOURCE_PATH" 1>/dev/null 2>/dev/null; then
                 mkdir "$RESOURCE_PATH"
             fi
-            rsync --delete -rvh "$BACKUP_PATH/data/" "$RESOURCE_PATH/"
+            OPTIONAL_DIRECTORY_SUFFIX="/"
         fi
+
+        $OPTIONAL_SSH_PASS rsync "$OPTIONAL_SSH_RSYNC_FLAG" \
+            --progress --delete -rvh \
+            "$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$BACKUP_PATH/data$OPTIONAL_DIRECTORY_SUFFIX" \
+            "$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX"
     fi
 }
 
