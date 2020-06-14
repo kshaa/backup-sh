@@ -160,6 +160,10 @@ json_nullable() {
 BACKUP_TYPE="$(echo $CONFIG_JSON | jq -r .type)"
 BACKUP_NAME="$(echo $CONFIG_JSON | jq -r .name)"
 BACKUP_EXTRA_GROUPS="$(echo $CONFIG_JSON | jq -r .groups)"
+if [ -z "$BACKUP_EXTRA_GROUPS" ]
+then
+    BACKUP_EXTRA_GROUPS="[]"
+fi
 BACKUP_ACL="$(echo $CONFIG_JSON | jq -r .acl)"
 BACKUP_MAX_COUNT="$(echo $CONFIG_JSON | jq -r .max_count | json_nullable)"
 BACKUP_DESCRIPTION="$(echo $CONFIG_JSON | jq -r .description | json_nullable)"
@@ -296,6 +300,13 @@ then
     fi
 fi
 
+# Validation optional SSH connection works
+if ! $OPTIONAL_SSH echo "Hello world" >/dev/null
+then
+    echo "Error: Connection to storage host is broken" >&2
+    exit 1
+fi
+
 # Backup utility: Fetch backups
 # Generates a JSON list of information about
 # backups currently available in storage
@@ -348,10 +359,17 @@ fetch_backup_infos() {
 # only backups which are relevant to this backup configuration
 filter_configured_backup_infos() {
     BACKUP_INFOS="${1:-}"
+
+    # Filter configured name
     BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | contains($backup_name)) ]')"
-    BACKUP_GROUPS="$(echo "[ \"$BACKUP_NAME\", \"$TIMESTAMP\" ]" | jq --argjson extra_groups "$BACKUP_EXTRA_GROUPS" '. + $extra_groups')"
-    for GROUP in "${FILTER_VALUES[@]}"; do
-        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$GROUP" '[ .[] | select(.groups[]? | contains($group)) ]')"
+
+    # Filter configured groups
+    BACKUP_GROUPS="$(echo "[ \"$BACKUP_NAME\" ]" | jq --argjson extra_groups "$BACKUP_EXTRA_GROUPS" '. + $extra_groups')"
+    LENGTH="$(echo "$BACKUP_GROUPS" | jq -r length)" && START=0 && END="$(($LENGTH - 1))"
+    for (( INDEX = $START; INDEX <= $END; INDEX++ ))
+    do
+        BACKUP_GROUP="$(echo "$BACKUP_GROUPS" | jq -r --argjson index "$INDEX" '.[$index]')"
+        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$BACKUP_GROUP" '[ .[] | select(.groups[]? | contains($group)) ]')"
     done
 
     echo "$BACKUP_INFOS" | jq -r '. | sort_by(.created_at)'
@@ -362,7 +380,8 @@ filter_configured_backup_infos() {
 # only backups which are relevant to parameters
 filter_parameterized_backup_infos() {
     BACKUP_INFOS="${1:-}"
-    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | contains($backup_name)) ]')"
+
+    # Filter parameterized name or groups
     if [ "$FILTER" == "name" ]
     then
         NAME="${FILTER_VALUES[0]:-}"
@@ -390,10 +409,6 @@ create_backup() {
 
     # Groups
     TIMESTAMP="$(date +"%Y-%m-%d-%H-%M-%S")"
-    if [ -z "$BACKUP_EXTRA_GROUPS" ]
-    then
-        BACKUP_EXTRA_GROUPS="[]"
-    fi
     BACKUP_GROUPS="$(echo "[ \"$BACKUP_NAME\", \"$TIMESTAMP\" ]" | jq --argjson extra_groups "$BACKUP_EXTRA_GROUPS" '. + $extra_groups')"
     if [ "$FILTER" == "groups" ]
     then
@@ -541,6 +556,7 @@ then
     fi
 else
     BACKUP_INFOS="$(fetch_backup_infos)"
+    BACKUP_INFOS="$(filter_configured_backup_infos "$BACKUP_INFOS")"
     BACKUP_INFOS="$(filter_parameterized_backup_infos "$BACKUP_INFOS")"
     if [ "$ACTION" == "get" ]
     then
