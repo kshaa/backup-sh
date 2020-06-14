@@ -361,7 +361,7 @@ filter_configured_backup_infos() {
     BACKUP_INFOS="${1:-}"
 
     # Filter configured name
-    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | contains($backup_name)) ]')"
+    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | . == $backup_name) ]')"
 
     # Filter configured groups
     BACKUP_GROUPS="$(echo "[ \"$BACKUP_NAME\" ]" | jq --argjson extra_groups "$BACKUP_EXTRA_GROUPS" '. + $extra_groups')"
@@ -369,7 +369,7 @@ filter_configured_backup_infos() {
     for (( INDEX = $START; INDEX <= $END; INDEX++ ))
     do
         BACKUP_GROUP="$(echo "$BACKUP_GROUPS" | jq -r --argjson index "$INDEX" '.[$index]')"
-        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$BACKUP_GROUP" '[ .[] | select(.groups[]? | contains($group)) ]')"
+        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$BACKUP_GROUP" '[ .[] | select(.groups[]? | . == $group) ]')"
     done
 
     echo "$BACKUP_INFOS" | jq -r '. | sort_by(.created_at)'
@@ -389,7 +389,7 @@ filter_parameterized_backup_infos() {
     elif [ "$FILTER" == "groups" ]
     then
         for GROUP in "${FILTER_VALUES[@]}"; do
-            BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$GROUP" '[ .[] | select(.groups[]? | contains($group)) ]')"
+            BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$GROUP" '[ .[] | select(.groups[]? | . == $group) ]')"
         done
     fi
 
