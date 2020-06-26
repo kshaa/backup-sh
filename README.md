@@ -2,6 +2,16 @@
 
 It's like a tiny backup utility for some minor backup management.
 
+## Environment
+```bash
+# Environment dependencies
+$ niv show
+# Build environment
+$ nix-build
+# Enter shell w/ backup.sh
+$ nix-shell
+```
+
 ## Usage
 ```bash
 $ ./backup.sh help
