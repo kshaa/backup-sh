@@ -1,7 +1,7 @@
 { sources ? import ./nix/sources.nix }: 
 let
-    pkgs = (import sources.nixpkgs {});
-    gitignore = (import sources.gitignore {});
+    pkgs = import sources.nixpkgs {};
+    gitignore = import sources.gitignore {};
     gitignoreSource = gitignore.gitignoreSource;
 in with pkgs; stdenv.mkDerivation {
     pname = "backup-sh";
