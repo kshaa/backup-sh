@@ -11,6 +11,6 @@ in with pkgs; stdenv.mkDerivation {
     installPhase = ''
         install -m755 -D backup.sh "$out/bin/backup.sh"
         wrapProgram "$out/bin/backup.sh" \
-            --prefix PATH : "${stdenv.lib.makeBinPath [ yq jq rsync mktemp ]}"
+            --prefix PATH : "${stdenv.lib.makeBinPath [ acl yq jq rsync mktemp openssh sshpass ]}"
     '';
 }

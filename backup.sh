@@ -228,7 +228,7 @@ fi
 if [ "$BACKUP_TYPE" == "ssh" ]
 then
     OPTIONAL_SSH_USER_HOST="$OPTIONAL_SSH_USER_COMPONENT$OPTIONAL_SSH_HOST_COMPONENT"
-    OPTIONAL_STORAGE_SSH_CONTEXT="$OPTIONAL_SSH_PASS ssh -q $OPTIONAL_SSH_KEY_FLAG $OPTIONAL_SSH_PORT_FLAG $OPTIONAL_SSH_USER_HOST"
+    OPTIONAL_STORAGE_SSH_CONTEXT="$OPTIONAL_SSH_PASS ssh -oStrictHostKeyChecking=no -q $OPTIONAL_SSH_KEY_FLAG $OPTIONAL_SSH_PORT_FLAG $OPTIONAL_SSH_USER_HOST"
     OPTIONAL_SSH="$OPTIONAL_STORAGE_SSH_CONTEXT -- "
     OPTIONAL_SSH_RSYNC_FLAG='-e "ssh '$OPTIONAL_SSH_PORT_FLAG' '$OPTIONAL_SSH_KEY_FLAG'"'
     OPTIONAL_SSH_HOST_SEPERATOR=":"
@@ -243,6 +243,13 @@ fi
 if [ -n "$DEBUG" ]
 then
     echo "Debug: SSH execution statement: $OPTIONAL_STORAGE_SSH_CONTEXT" >&2
+fi
+
+# Validation: SSH requires `ssh`
+if ! [ -x "$(command -v ssh)" ] && [ "$BACKUP_TYPE" == "ssh" ]
+then
+  echo 'Error: ssh is not installed, but is required for SSH connection.' >&2
+  exit 1
 fi
 
 # Validation: SSH password requires `sshpass`
