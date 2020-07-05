@@ -191,7 +191,10 @@ if [ -z "$STORAGE_PRIVATE_KEY_PATH" ]
 then
     OPTIONAL_SSH_KEY_FLAG=""
 else
-    OPTIONAL_SSH_KEY_FLAG="-i $(realpath $STORAGE_PRIVATE_KEY_PATH)"
+    TMP_KEY="$(mktemp)"
+    cat $STORAGE_PRIVATE_KEY_PATH > $TMP_KEY
+    chmod 0600 $TMP_KEY
+    OPTIONAL_SSH_KEY_FLAG="-i $(realpath $TMP_KEY)"
 fi
 
 # SSH type configuration: Port
@@ -603,3 +606,6 @@ else
         done
     fi
 fi
+
+# Temp file clean-up
+rm -f $TMP_KEY
