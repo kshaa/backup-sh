@@ -443,7 +443,7 @@ create_backup() {
 
         SYNC=""
         SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
-        SYNC+="--progress --delete -rvh "
+        SYNC+="--progress --delete -rvhl --chmod=u+rw "
         SYNC+="\"$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX\" "
         SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$STORAGE_FULL_PATH/data$OPTIONAL_DIRECTORY_SUFFIX\""
         eval "$SYNC"
@@ -464,7 +464,7 @@ create_backup() {
             # Send ACL to storage
             SYNC=""
             SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
-            SYNC+="--progress --delete -rvh "
+            SYNC+="--progress --delete -rvhl --chmod=u+rw "
             SYNC+="\"$TMPACL\" "
             SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$STORAGE_FULL_PATH/acl.txt\""
             eval "$SYNC"
@@ -534,7 +534,7 @@ restore_backup() {
         # Restore backup from storage
         SYNC=""
         SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
-        SYNC+="--progress --delete -rvh "
+        SYNC+="--progress --delete -rvhl --chmod=u+rw "
         SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$BACKUP_PATH/data$OPTIONAL_DIRECTORY_SUFFIX\" "
         SYNC+="\"$RESOURCE_PATH$OPTIONAL_DIRECTORY_SUFFIX\""
         eval "$SYNC"
@@ -546,7 +546,7 @@ restore_backup() {
             TMPACL="$(mktemp)"
             SYNC=""
             SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
-            SYNC+="--progress --delete -rvh "
+            SYNC+="--progress --delete -rvhl --chmod=u+rw "
             SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$BACKUP_PATH/acl.txt\" "
             SYNC+="\"$TMPACL\""
             eval "$SYNC"
