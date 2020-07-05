@@ -368,7 +368,7 @@ filter_configured_backup_infos() {
     BACKUP_INFOS="${1:-}"
 
     # Filter configured name
-    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | . == $backup_name) ]')"
+    BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg backup_name "$BACKUP_NAME" '[ .[] | select(.groups[]? | . == $backup_name) ] | unique')"
 
     # Filter configured groups
     BACKUP_GROUPS="$(echo "[ \"$BACKUP_NAME\" ]" | jq --argjson extra_groups "$BACKUP_EXTRA_GROUPS" '. + $extra_groups')"
@@ -376,7 +376,7 @@ filter_configured_backup_infos() {
     for (( INDEX = $START; INDEX <= $END; INDEX++ ))
     do
         BACKUP_GROUP="$(echo "$BACKUP_GROUPS" | jq -r --argjson index "$INDEX" '.[$index]')"
-        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$BACKUP_GROUP" '[ .[] | select(.groups[]? | . == $group) ]')"
+        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$BACKUP_GROUP" '[ .[] | select(.groups[]? | . == $group) ] | unique')"
     done
 
     echo "$BACKUP_INFOS" | jq -r '. | sort_by(.created_at)'
@@ -392,11 +392,11 @@ filter_parameterized_backup_infos() {
     if [ "$FILTER" == "name" ]
     then
         NAME="${FILTER_VALUES[0]:-}"
-        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg name "$NAME" '[ .[] | select(.name == $name) ]')"
+        BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg name "$NAME" '[ .[] | select(.name == $name) ] | unique')"
     elif [ "$FILTER" == "groups" ]
     then
         for GROUP in "${FILTER_VALUES[@]}"; do
-            BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$GROUP" '[ .[] | select(.groups[]? | . == $group) ]')"
+            BACKUP_INFOS="$(echo "$BACKUP_INFOS" | jq -r --arg group "$GROUP" '[ .[] | select(.groups[]? | . == $group) ] | unique')"
         done
     fi
 
@@ -451,12 +451,24 @@ create_backup() {
         # Copy backup ACL to storage if required
         if [ "$BACKUP_ACL" == "true" ]
         then
+            # Create ACL
+            TMPACL="$(mktemp)"
             if [ "$RESOURCE_TYPE" == "file" ]; then
-                ACL="$(cd "$(dirname $RESOURCE_PATH)" && getfacl -R $(basename $RESOURCE_PATH) | base64 -w0)"
+                cd "$(dirname $RESOURCE_PATH)"
+                getfacl -R $(basename $RESOURCE_PATH) | base64 -w0 > $TMPACL
             elif [ "$RESOURCE_TYPE" == "directory" ]; then
-                ACL="$(cd "$RESOURCE_PATH" && getfacl -R . | base64 -w0)"
+                cd "$RESOURCE_PATH"
+                getfacl -R . | base64 -w0 > $TMPACL
             fi
-            $OPTIONAL_SSH eval "echo \"$ACL\" | base64 -d > $STORAGE_FULL_PATH/acl.txt"
+
+            # Send ACL to storage
+            SYNC=""
+            SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
+            SYNC+="--progress --delete -rvh "
+            SYNC+="\"$TMPACL\" "
+            SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$STORAGE_FULL_PATH/acl.txt\""
+            eval "$SYNC"
+            rm $TMPACL
         fi
 
         # Copy backup meta info to storage
@@ -530,9 +542,16 @@ restore_backup() {
         # Restore ACL if required
         if [ "$BACKUP_ACL" == "true" ]
         then
-            ACL="$($OPTIONAL_SSH cat "$BACKUP_PATH/acl.txt")"
+            # Get ACL from storage
             TMPACL="$(mktemp)"
-            echo "$ACL" > $TMPACL
+            SYNC=""
+            SYNC+="$OPTIONAL_SSH_PASS rsync $OPTIONAL_SSH_RSYNC_FLAG "
+            SYNC+="--progress --delete -rvh "
+            SYNC+="\"$OPTIONAL_SSH_USER_HOST$OPTIONAL_SSH_HOST_SEPERATOR$BACKUP_PATH/acl.txt\" "
+            SYNC+="\"$TMPACL\""
+            eval "$SYNC"
+
+            # Restore ACL
             if [ "$RESOURCE_TYPE" == "file" ]; then
                 cd "$(dirname $RESOURCE_PATH)"
             elif [ "$RESOURCE_TYPE" == "directory" ]; then
